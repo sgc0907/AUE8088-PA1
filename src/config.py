@@ -23,7 +23,7 @@ IMAGE_STD           = [0.2302, 0.2265, 0.2262]
 
 # Network
 # resnet101, efficientnet_b0, swin3d_b, ...
-MODEL_NAME          = 'resnet18'
+MODEL_NAME          = os.environ.get("MODEL_NAME", "resnet18")
 
 # Compute related
 ACCELERATOR         = 'gpu'
@@ -32,7 +32,7 @@ PRECISION_STR       = '32-true'
 
 # Logging
 WANDB_PROJECT       = 'aue8088-pa1'
-WANDB_ENTITY        = os.environ.get('WANDB_ENTITY')
+WANDB_ENTITY        = 'akami40-hanyang-university'
 WANDB_SAVE_DIR      = 'wandb/'
 WANDB_IMG_LOG_FREQ  = 50
 WANDB_NAME          = f'{MODEL_NAME}-B{BATCH_SIZE}-{OPTIMIZER_PARAMS["type"]}'
