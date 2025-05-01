@@ -1,4 +1,4 @@
-# Python packages
+# src/network.py
 from termcolor import colored
 from typing import Dict
 import copy
@@ -7,9 +7,9 @@ import copy
 from lightning.pytorch import LightningModule
 from lightning.pytorch.loggers.wandb import WandbLogger
 from torch import nn
+import torch
 from torchvision import models
 from torchvision.models.alexnet import AlexNet
-import torch
 
 # Custom packages
 from src.metric import MyAccuracy
@@ -17,46 +17,13 @@ import src.config as cfg
 from src.util import show_setting
 
 
-# [TODO: Optional] Rewrite this class if you want
 class MyNetwork(AlexNet):
-    def __init__(self, num_classes=10, dropout=0.5):
+    def __init__(self, num_classes=200, dropout=0.5):
         super().__init__()
-
-        self.features = nn.Sequential(
-            nn.Conv2d(3, 64, kernel_size=11, stride=4, padding=2),
-            nn.ReLU(inplace=True),
-            nn.MaxPool2d(kernel_size=3, stride=2),
-            nn.Conv2d(64, 192, kernel_size=5, padding=2),
-            nn.ReLU(inplace=True),
-            nn.MaxPool2d(kernel_size=3, stride=2),
-            nn.Conv2d(192, 384, kernel_size=3, padding=1),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(384, 256, kernel_size=3, padding=1),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(256, 256, kernel_size=3, padding=1),
-            nn.ReLU(inplace=True),
-            nn.MaxPool2d(kernel_size=3, stride=2)
-        ) 
-
-        self.avgpool = nn.AdaptiveAvgPool2d((6, 6))
-
-        self.classifier = nn.Sequential(
-            nn.Dropout(p=dropout),
-            nn.Linear(256 * 6 * 6, 4096),
-            nn.ReLU(inplace=True),
-            nn.Dropout(p=dropout),
-            nn.Linear(4096, 4096),
-            nn.ReLU(inplace=True),
-            nn.Linear(4096, num_classes)
-        )
+        # features, avgpool, classifier unchanged
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # [TODO: Optional] Modify this as well if you want
-        x = self.features(x)
-        x = self.avgpool(x)
-        x = torch.flatten(x, 1)
-        x = self.classifier(x)
-        return x
+        return super().forward(x)
 
 
 class SimpleClassifier(LightningModule):
@@ -65,25 +32,47 @@ class SimpleClassifier(LightningModule):
                  num_classes: int = 200,
                  optimizer_params: Dict = dict(),
                  scheduler_params: Dict = dict(),
+                 model_kwargs: Dict = None,
         ):
         super().__init__()
+        model_kwargs = model_kwargs or {}
 
-        # Network
         if model_name == 'MyNetwork':
             self.model = MyNetwork()
         else:
-            models_list = models.list_models()
-            assert model_name in models_list, f'Unknown model name: {model_name}. Choose one from {", ".join(models_list)}'
-            self.model = models.get_model(model_name, num_classes=num_classes)
+            if model_name == 'swin_b':
+                # Swin-B: 사전학습 가중치 로드 후 head 교체
+                from torchvision.models import Swin_B_Weights
+                weights = Swin_B_Weights.IMAGENET1K_V1
+                m = models.swin_b(weights=weights)
+                # classifier head 교체
+                in_features = m.head.in_features
+                m.head = nn.Linear(in_features, num_classes)
+                self.model = m
+            elif model_name.startswith('swin_'):
+                # 기타 Swin: 기본 get_model 사용
+                self.model = models.get_model(
+                    model_name,
+                    num_classes=num_classes,
+                    pretrained=True,
+                    **model_kwargs
+                )
+            else:
+                # 일반 모델: get_model with pretrained
+                self.model = models.get_model(
+                    model_name,
+                    num_classes=num_classes,
+                    pretrained=True,
+                    **model_kwargs
+                )
 
-        # Loss function
-        self.loss_fn = nn.CrossEntropyLoss()
-
+        # Label smoothing 적용한 Loss
+        self.loss_fn = nn.CrossEntropyLoss(label_smoothing=cfg.LABEL_SMOOTHING)
         # Metric
         self.accuracy = MyAccuracy()
-
-        # Hyperparameters
+        # 하이퍼파라미터 저장
         self.save_hyperparameters()
+
 
     def on_train_start(self):
         show_setting(cfg)
@@ -102,11 +91,18 @@ class SimpleClassifier(LightningModule):
         return self.model(x)
 
     def training_step(self, batch, batch_idx):
-        loss, scores, y = self._common_step(batch)
-        accuracy = self.accuracy(scores, y)
-        self.log_dict({'loss/train': loss, 'accuracy/train': accuracy},
-                      on_step=False, on_epoch=True, prog_bar=True, logger=True)
-        return loss
+        x, y = batch
+        if cfg.MIXUP_ALPHA > 0:
+            # λ ~ Beta(α,α)
+            lam = torch.distributions.Beta(cfg.MIXUP_ALPHA, cfg.MIXUP_ALPHA).sample().item()
+            idx = torch.randperm(x.size(0), device=x.device)
+            x = lam * x + (1 - lam) * x[idx]
+            y_a, y_b = y, y[idx]
+            scores = self.forward(x)
+            loss = lam * self.loss_fn(scores, y_a) + (1 - lam) * self.loss_fn(scores, y_b)
+        else:
+            loss, scores, y = self._common_step((x, y))
+        accuracy = self.accuracy(scores, y if cfg.MIXUP_ALPHA == 0 else y_a)  # logging 용
 
     def validation_step(self, batch, batch_idx):
         loss, scores, y = self._common_step(batch)

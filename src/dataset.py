@@ -41,12 +41,33 @@ class TinyImageNetDatasetModule(LightningDataModule):
 
     def train_dataloader(self):
         tf_train = transforms.Compose([
-            transforms.RandomRotation(cfg.IMAGE_ROTATION),
-            transforms.RandomHorizontalFlip(cfg.IMAGE_FLIP_PROB),
-            transforms.RandomCrop(cfg.IMAGE_NUM_CROPS, padding=cfg.IMAGE_PAD_CROPS),
+            # random aug
+            transforms.RandAugment(num_ops=cfg.RAND_AUG_N, magnitude=cfg.RAND_AUG_M),
+
+            # crop, resize, jitter
+            transforms.RandomResizedCrop(cfg.IMAGE_NUM_CROPS, scale=(0.8, 1.0), ratio=(3/4, 4/3)),
+            transforms.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4, hue=0.1),
+
+            # transform
+            transforms.RandomRotation(degrees=cfg.IMAGE_ROTATION),
+            transforms.RandomHorizontalFlip(p=cfg.IMAGE_FLIP_PROB),
+            transforms.RandomVerticalFlip(p=0.5),
+            transforms.RandomPerspective(distortion_scale=0.5, p=0.5),
+            transforms.RandomAffine(
+                degrees=15,
+                translate=(0.1, 0.1),
+                scale=(0.9, 1.1),
+                shear=10
+            ),
+
             transforms.ToTensor(),
-            transforms.Normalize(cfg.IMAGE_MEAN, cfg.IMAGE_STD),
+
+            # normalize, regularization
+            transforms.GaussianBlur(kernel_size=(5, 9), sigma=(0.1, 5)),
+            transforms.RandomErasing(p=0.25, scale=(0.02, 0.33), ratio=(0.3, 3.3)),
+            transforms.Normalize(cfg.IMAGE_MEAN, cfg.IMAGE_STD), # Normalize is usually last
         ])
+
         dataset = ImageFolder(os.path.join(cfg.DATASET_ROOT_PATH, self.__DATASET_NAME__, 'train'), tf_train)
         msg = f"[Train]\t root dir: {dataset.root}\t | # of samples: {len(dataset):,}"
         print(colored(msg, color='blue', attrs=('bold',)))

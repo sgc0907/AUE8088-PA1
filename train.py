@@ -18,13 +18,23 @@ torch.set_float32_matmul_precision('medium')
 
 
 if __name__ == "__main__":
+    if "swin" in cfg.MODEL_NAME:
+        model_kwargs = { 
+            "weights": None,
+        }
+    else:
+        model_kwargs = {
+            # "image_size": 64,
+            "weights": None,
+        }
 
     model = SimpleClassifier(
         model_name = cfg.MODEL_NAME,
         num_classes = cfg.NUM_CLASSES,
         optimizer_params = cfg.OPTIMIZER_PARAMS,
         scheduler_params = cfg.SCHEDULER_PARAMS,
-    )
+        model_kwargs=model_kwargs,
+    )    
 
     datamodule = TinyImageNetDatasetModule(
         batch_size = cfg.BATCH_SIZE,
